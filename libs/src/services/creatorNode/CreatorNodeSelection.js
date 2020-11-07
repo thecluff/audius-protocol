@@ -1,7 +1,5 @@
-const axios = require('axios')
-const semver = require('semver')
-
 const ServiceSelection = require('../../service-selection/ServiceSelection')
+const { timeRequestsAndSortByVersion } = require('../../utils/network')
 const { CREATOR_NODE_SERVICE_NAME } = require('./constants')
 
 class CreatorNodeSelection extends ServiceSelection {
@@ -12,26 +10,36 @@ class CreatorNodeSelection extends ServiceSelection {
         const services = await this.ethContracts.getServiceProviderList(CREATOR_NODE_SERVICE_NAME)
         return services.map(e => e.endpoint) // ? might need to map like services.map(e => e.endpoint)
       },
-      whitelist
+      whitelist,
+      blacklist
     })
     this.creatorNode = creatorNode
     this.numberOfNodes = numberOfNodes
     this.ethContracts = ethContracts
-    this.blacklist = blacklist
+    // Services with the structure {request, response, millis} (see timeRequest) sorted by semver and response time
+    this.healthCheckedServicesList = []
 
     // List of valid past creator node versions registered on chain
     this.validVersions = null
+
+    this.state = Object.freeze({
+      GET_ALL_SERVICES: 'GET ALL SERVICES',
+      FILTERED_TO_WHITELIST: 'FILTERED TO WHITELIST',
+      FILTERED_FROM_BLACKLIST: 'FILTERED FROM BLACKLIST',
+      FILTERED_OUT_UNHEALTHY_AND_OUTDATED: 'FILTERED OUT UNHEALTHY AND OUTDATED',
+      FILTERED_OUT_SYNC_IN_PROGRESS: 'FILTERED OUT SYNC IN PROGRESS',
+      SELECTED_PRIMARY_AND_SECONDARIES: 'SELECTED PRIMARY AND SECONDARIES'
+    })
   }
 
   /**
-   * Selects a primary and secondary creator nodes
+   * Selects a primary and secondary creator nodes. Order of preference is highest version, then response time.
    *
    * 1. Retrieve all the creator node services
    * 2. Filter from/out creator nodes based off of the whitelist and blacklist
-   * 3. Init a map of default stats of each service
-   * 4. Perform a health check and sync status check to determine health and update stats
-   * 5. Sort by healthiest (highest version -> lowest version; secondary check if equal version based off of responseTime)
-   * 6. Select a primary and numberOfNodes-1 number of secondaries
+   * 3. Filter out unhealthy, outdated, and still syncing nodes via health and sync check
+   * 4. Sort by healthiest (highest version -> lowest version); secondary check if equal version based off of responseTime
+   * 5. Select a primary and numberOfNodes-1 number of secondaries (most likely 2) either from available nodes or backups
    */
   async select () {
     // Reset decision tree
@@ -39,107 +47,149 @@ class CreatorNodeSelection extends ServiceSelection {
 
     // Get all the creator node endpoints on chain and filter
     let services = await this.getServices()
-    this.decisionTree.push({ stage: 'Get All Services', val: services })
+    this.decisionTree.push({ stage: this.state.GET_ALL_SERVICES, val: services })
 
-    if (this.whitelist && this.whitelist.length > 0) {
-      services = this.filterToWhitelist(services)
-      this.decisionTree.push({ stage: 'Filtered To Whitelist', val: services })
-    }
+    if (this.whitelist) { services = this.filterToWhitelist(services) }
+    this.decisionTree.push({ stage: this.state.FILTERED_TO_WHITELIST, val: services })
 
-    if (this.blacklist && this.blacklist.length > 0) {
-      services = this.filterFromBlacklist(services)
-      this.decisionTree.push({ stage: 'Filtered From Blacklist', val: services })
-    }
+    if (this.blacklist) { services = this.filterFromBlacklist(services) }
+    this.decisionTree.push({ stage: this.state.FILTERED_FROM_BLACKLIST, val: services })
 
-    // Init map of creator node endpoints and their default stats
-    const map = {}
-    services.map(service => {
-      map[service] = {
-        version: null,
-        healthCheckEndpoint: `${service}/health_check`,
-        healthCheckResponseTime: null,
-        isHealthy: false,
-        isBehind: true,
-        isConfigured: false,
-        geographicData: {}
-        // todo: add other criteria we should evaluate like diskUsage, currentNumberOfRequests
+    const healthCheckedServices = await timeRequestsAndSortByVersion(
+      services.map(node => ({
+        id: node,
+        url: `${node}/health_check`
+      }))
+    )
+
+    // Store a copy of the sorted by version and response time nodes
+    this.healthCheckedServicesList = healthCheckedServices
+
+    const healthyServices = healthCheckedServices.filter(resp => {
+      const endpoint = resp.request.id
+      let isHealthy = false
+      if (resp.response) {
+        const isUp = resp.response.status === 200
+        const versionIsUpToDate = this.ethContracts.hasSameMajorAndMinorVersion(
+          this.currentVersion,
+          resp.response.data.data.version
+        )
+        isHealthy = isUp && versionIsUpToDate
       }
+
+      // If not healthy, add to unhealthy. Else, add as backup
+      if (!isHealthy) {
+        this.addUnhealthy(endpoint)
+      } else {
+        this.addBackup(endpoint, resp.response)
+      }
+
+      return isHealthy
     })
+    services = healthyServices.map(service => service.request.id)
+    this.decisionTree.push({ stage: this.state.FILTERED_OUT_UNHEALTHY_AND_OUTDATED, val: services })
 
-    const healthyEndpoints = []
-    const healthyServices = []
-    for (const service of services) {
-      const start = Date.now()
-      try {
-        // Check health and sync status, and then update stats per service
-        let healthCheckResp = await axios({
-          method: 'get',
-          url: map[service].healthCheckEndpoint
-        })
-        healthCheckResp = healthCheckResp.data.data
-
-        map[service].healthCheckResponseTime = Date.now() - start
-        map[service].version = healthCheckResp.version
-        const { isBehind, isConfigured } = await this.creatorNode.getSyncStatus(service)
-        map[service].isBehind = isBehind
-        map[service].isConfigured = isConfigured
-        map[service].geographicData = {
-          country: healthCheckResp.country,
-          latitude: healthCheckResp.latitude,
-          longitude: healthCheckResp.longitude
-        }
-
-        // If service is not configured, behind in blocks, or its major + minor version is behind, mark as unhealthy
-        map[service].isHealthy = isConfigured && !isBehind &&
-          this.ethContracts.hasSameMajorAndMinorVersion(this.currentVersion, healthCheckResp.version)
-
-        // Add to healthyServices list; used and sorted to select primary and secondaries
-        if (map[service].isHealthy) {
-          healthyEndpoints.push(service)
-          healthyServices.push({ endpoint: service, version: map[service].version, responseTime: map[service].healthCheckResponseTime })
-        }
-      } catch (e) {
-        console.error(`CreatorNodeSelection - Error with checking ${service} health: ${e}`)
+    const successfulSyncCheckServices = []
+    const syncResponses = await Promise.all(services.map(service => this.getSyncStatus(service)))
+    syncResponses.forEach(response => {
+      if (response.error) {
+        console.warn(`CreatorNodeSelection - Failed sync status check for ${response.service}: ${response.e}`)
+        this.removeFromBackups(response.service)
+        this.addUnhealthy(response.service)
       }
     }
     this.decisionTree.push({ stage: 'Filtered Out Known Unhealthy', val: healthyEndpoints })
 
-    // Prioritize higher versions for selected creator nodes
-    this.sortBySemver(healthyServices)
+      const { isBehind, isConfigured } = response.syncStatus
+      // a first time creator will have a sync status as isBehind = true and isConfiugred = false. this is ok
+      const firstTimeCreator = isBehind && !isConfigured
+      // an existing creator will have a sync status (assuming healthy) as isBehind = false and isConfigured = true. this is also ok
+      const existingCreator = !isBehind && isConfigured
+      // if neither of these two are true, the cnode is not suited to be selected
+      if (firstTimeCreator || existingCreator) successfulSyncCheckServices.push(response.service)
+    })
 
-    // Index 0 of healthyServices will be the most optimal creator node candidate
-    const primary = healthyServices[0] ? healthyServices[0].endpoint : null
+    services = [...successfulSyncCheckServices]
+    this.decisionTree.push({ stage: this.state.FILTERED_OUT_SYNC_IN_PROGRESS, val: services })
 
-    // Index 1 to n of healthyServices will be sorted in highest version -> lowest version
-    // Return up to numberOfNodes-1 of secondaries that is not null and not the primary
-    let numSecondariesReturned = 0
-    const secondaries = healthyServices
-      .filter(service =>
-        service && service.endpoint !== primary && numSecondariesReturned++ < this.numberOfNodes
-      )
-      .map(service => service.endpoint)
-
-    this.decisionTree.push({ stage: 'Made A Selection of a Primary and Secondaries', val: { primary, secondaries: secondaries.toString() } })
+    const primary = this.getPrimary(services)
+    const secondaries = this.getSecondaries(services, primary)
+    this.decisionTree.push({
+      stage: this.state.SELECTED_PRIMARY_AND_SECONDARIES,
+      val: { primary, secondaries: secondaries.toString() }
+    })
 
     console.info('CreatorNodeSelection - final decision tree state', this.decisionTree)
 
-    // not sure about the structure of services
-    return { primary, secondaries, services: map }
+    return { primary, secondaries, services: healthCheckedServices }
   }
 
   /**
-   * Sort by highest version number. If the compared services are of the same, sort by
-   * its response time.
-   * @param {[{endpoint, version, responseTime}]} services
+   * Checks the sync progress of a creator node
+   * @param {string} service creator node endopint
    */
-  sortBySemver (services) {
-    services.sort((a, b) => {
-      if (semver.gt(a.version, b.version)) return -1
-      if (semver.lt(a.version, b.version)) return 1
+  async getSyncStatus (service) {
+    try {
+      const syncStatus = await this.creatorNode.getSyncStatus(service)
+      return { service, syncStatus, error: null }
+    } catch (e) {
+      return { service, syncStatus: null, error: e }
+    }
+  }
 
-      return a.responseTime - b.responseTime
-    })
-    return services
+  /**
+   * Select a primary creator node
+   * @param {string[]} services all healthy creator node endpoints
+   */
+  getPrimary (services) {
+    // Index 0 of services will be the most optimal creator node candidate
+    // Select 1 from healthy services
+    let primary = services[0]
+    // All nodes are stored as backup unless unhealthy. Once chosen, remove from backups
+
+    // If no healthy services available, select from backups
+    if (!primary) {
+      primary = this.selectFromBackups()
+    }
+
+    // If no backups available, select from unhealthy
+    if (!primary) {
+      primary = this.selectFromUnhealthy()
+    }
+
+    return primary
+  }
+
+  /**
+   * Selects secondary creator nodes
+   * @param {string[]} services all healthy creator node endpoints
+   * @param {string} primary the chosen primary
+   */
+  getSecondaries (services, primary) {
+    // Index 1 to n of services will be sorted in highest version -> lowest version
+    // Select up to numberOfNodes-1 of secondaries that is not null and not the primary
+    let remainingSecondaries = this.numberOfNodes - 1
+    const secondaries = services
+      .filter(service => {
+        const validSecondary = service && service !== primary && remainingSecondaries-- > 0
+        return validSecondary
+      })
+
+    // If not enough secondaries returned from services, select from backups
+    remainingSecondaries = this.numberOfNodes - 1 - secondaries.length
+    while (remainingSecondaries-- > 0) {
+      const backup = this.selectFromBackups()
+      if (backup && backup !== primary) secondaries.push(backup)
+    }
+
+    // If not enough secondaries returned from backups, select from unhealthy
+    remainingSecondaries = this.numberOfNodes - 1 - secondaries.length
+    while (remainingSecondaries-- > 0) {
+      const unhealthy = this.selectFromUnhealthy()
+      if (unhealthy && unhealthy !== primary) secondaries.push(unhealthy)
+    }
+
+    return secondaries
   }
 
   /**
