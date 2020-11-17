@@ -3,7 +3,7 @@ const { timeRequestsAndSortByVersion } = require('../utils/network')
 const CreatorNodeSelection = require('../services/creatorNode/CreatorNodeSelection')
 
 const CREATOR_NODE_SERVICE_NAME = 'content-node'
-const DISCOVERY_PROVIDER_SERVICE_NAME = 'discovery-provider'
+const DISCOVERY_PROVIDER_SERVICE_NAME = 'discovery-node'
 
 /**
  * API methods to interact with Audius service providers.
