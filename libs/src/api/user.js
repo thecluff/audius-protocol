@@ -341,6 +341,13 @@ class Users extends Base {
     return this.contracts.SocialFeatureFactoryClient.deleteUserFollow(followerUserId, followeeUserId)
   }
 
+  /**
+   * Gets the clock status for user in userStateManager across replica set.
+   */
+  async getClockValuesFromReplicaSet () {
+    return this.creatorNode.getClockValuesFromReplicaSet()
+  }
+
   /* ------- PRIVATE  ------- */
 
   /**
