@@ -9,12 +9,13 @@ class ServiceTypeManagerClient extends GovernedContractClient {
       Utils.utf8ToHex(serviceType),
       Utils.utf8ToHex(serviceVersion)
     )
-    return this.web3Manager.sendTransaction(
-      method,
-      DEFAULT_GAS_AMOUNT,
-      (await this.governanceClient.getAddress()),
-      privateKey
-    )
+    console.log(method)
+    // return this.web3Manager.sendTransaction(
+    //   method,
+    //   DEFAULT_GAS_AMOUNT,
+    //   (await this.governanceClient.getAddress()),
+    //   privateKey
+    // )
   }
 
   async addServiceType (serviceType, serviceTypeMin, serviceTypeMax, privateKey = null) {
