@@ -87,7 +87,8 @@ class EthContracts {
       this.ethWeb3Manager,
       ClaimsManagerABI,
       ClaimsManagerProxyKey,
-      this.getRegistryAddressForContract
+      this.getRegistryAddressForContract,
+      this.GovernanceClient
     )
 
     this.ServiceTypeManagerClient = new ServiceTypeManagerClient(

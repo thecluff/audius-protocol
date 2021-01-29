@@ -1,8 +1,8 @@
 const Utils = require('../../utils')
-const ContractClient = require('../contracts/ContractClient')
+const GovernedContractClient = require('../contracts/GovernedContractClient')
 const DEFAULT_GAS_AMOUNT = 1000000
 
-class ClaimsManagerClient extends ContractClient {
+class ClaimsManagerClient extends GovernedContractClient {
   /* ------- GETTERS ------- */
 
   // Get the duration of a funding round in blocks
@@ -97,6 +97,18 @@ class ClaimsManagerClient extends ContractClient {
       DEFAULT_GAS_AMOUNT
     )
   }
+
+  async updateFundingRoundBlockDiff (duration) {
+    const method = await this.getGovernedMethod(
+      'updateFundingRoundBlockDiff',
+      duration
+    )
+    return this.web3Manager.sendTransaction(
+      method,
+      DEFAULT_GAS_AMOUNT
+    )
+  }
+
 
   // Fetches the claim processed events
   async getClaimProcessedEvents ({

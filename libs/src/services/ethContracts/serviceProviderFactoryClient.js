@@ -35,23 +35,23 @@ class ServiceProviderFactoryClient extends GovernedContractClient {
       throw new Error('Invalid amount')
     }
 
-    const requestUrl = urlJoin(sanitizedEndpoint, 'health_check')
-    const axiosRequestObj = {
-      url: requestUrl,
-      method: 'get',
-      timeout: 1000
-    }
-    const resp = await axios(axiosRequestObj)
-    let endpointServiceType
-    try {
-      endpointServiceType = resp.data.data.service
-    } catch (e) {
-      endpointServiceType = resp.data.service
-    }
+    // const requestUrl = urlJoin(sanitizedEndpoint, 'health_check')
+    // const axiosRequestObj = {
+    //   url: requestUrl,
+    //   method: 'get',
+    //   timeout: 1000
+    // }
+    // const resp = await axios(axiosRequestObj)
+    // let endpointServiceType
+    // try {
+    //   endpointServiceType = resp.data.data.service
+    // } catch (e) {
+    //   endpointServiceType = resp.data.service
+    // }
 
-    if (serviceType !== endpointServiceType) {
-      throw new Error('Attempting to register endpoint with mismatched service type')
-    }
+    // if (serviceType !== endpointServiceType) {
+    //   throw new Error('Attempting to register endpoint with mismatched service type')
+    // }
 
     // Approve token transfer operation
     const contractAddress = await this.stakingProxyClient.getAddress()
@@ -475,6 +475,17 @@ class ServiceProviderFactoryClient extends GovernedContractClient {
   async updateDecreaseStakeLockupDuration (duration) {
     const method = await this.getGovernedMethod(
       'updateDecreaseStakeLockupDuration',
+      duration
+    )
+    return this.web3Manager.sendTransaction(
+      method,
+      DEFAULT_GAS_AMOUNT
+    )
+  }
+
+  async updateDeployerCutLockupDuration (duration) {
+    const method = await this.getGovernedMethod(
+      'updateDeployerCutLockupDuration',
       duration
     )
     return this.web3Manager.sendTransaction(

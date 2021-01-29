@@ -7,16 +7,20 @@ const { setServiceVersion, addServiceType } = require('./helpers/version')
 const {
   registerLocalService,
   queryLocalServices,
-  getStakingParameters
+  getStakingParameters,
+  increaseStake,
+  registerLocalServiceType,
+  reduceLockupDurations
 } = require('./helpers/spRegistration')
 const { deregisterLocalService } = require('./helpers/spRegistration')
 const { getClaimInfo, fundNewClaim } = require('./helpers/claim')
-const { getEthContractAccounts } = require('./helpers/utils')
+const { getEthWeb3AndAccounts, getEthContractAccounts } = require('./helpers/utils')
 
 // Directories within the audius-protocol repository used for development
 const serviceDirectoryList = ['discovery-provider', 'creator-node']
 const discProvEndpoint1 = 'http://audius-disc-prov_web-server_1:5000'
 const discProvEndpoint2 = 'http://audius-disc-prov_web-server_2:5000'
+const discProvEndpoint3 = 'http://audius-disc-prov_web-server_3:5000'
 const creatorNodeEndpoint1 = 'http://cn1_creator-node_1:4000'
 const creatorNodeEndpoint2 = 'http://cn2_creator-node_1:4001'
 const creatorNodeEndpoint3 = 'http://cn3_creator-node_1:4002'
@@ -100,10 +104,22 @@ const run = async () => {
         await _registerDiscProv1(audiusLibs, ethAccounts)
         break
 
+      case 'deregister-discprov-1':
+        await _deregisterDiscProv1(audiusLibs, ethAccounts)
+        break
+  
       case 'register-discprov-2':
         await _registerDiscProv2(audiusLibs, ethAccounts)
         break
 
+      case 'register-discprov-3':
+        await _registerDiscProv3(audiusLibs, ethAccounts)
+        break
+
+      case 'increase-stake':
+        await _increaseStake(audiusLibs, ethAccounts)
+        break
+  
       case 'register-cnode': {
         const serviceCount = args[3]
         if (serviceCount === undefined) throw new Error('register-cnode requires a service # as the second arg')
@@ -133,6 +149,23 @@ const run = async () => {
       case 'init-all':
         await _initializeLocalEnvironment(audiusLibs, ethAccounts)
         break
+
+      case 'get-addresses':
+        await _get_addresses(audiusLibs, ethAccounts)
+        break
+
+      case 'register-type':
+        await _registerServiceType(audiusLibs, ethAccounts)
+        break
+  
+      case 'get-accounts':
+        await _printAccounts(audiusLibs, ethAccounts)
+        break
+
+      case 'reduce-lockup':
+        await reduceLockupDurations(audiusLibs)
+        break
+
       default:
         throwArgError()
     }
@@ -161,6 +194,12 @@ const _registerDiscProv1 = async (audiusLibs, ethAccounts) => {
 const _registerDiscProv2 = async (audiusLibs, ethAccounts) => {
   let audiusLibs4 = await initAudiusLibs(true, null, ethAccounts[3])
   await registerLocalService(audiusLibs4, discoveryNodeType, discProvEndpoint2, amountOfAuds)
+}
+
+// Account 4
+const _registerDiscProv3 = async (audiusLibs, ethAccounts) => {
+  let audiusLibs5 = await initAudiusLibs(true, null, ethAccounts[4])
+  await registerLocalService(audiusLibs5, discoveryNodeType, discProvEndpoint2, amountOfAuds)
 }
 
 const makeCreatorNodeEndpoint = (serviceNumber) => `http://cn${serviceNumber}_creator-node_1:${4000 + parseInt(serviceNumber) - 1}`
@@ -194,6 +233,11 @@ const _deregisterAllSPs = async (audiusLibs, ethAccounts) => {
   await deregisterLocalService(audiusLibs5, contentNodeType, creatorNodeEndpoint3)
   const audiusLibs6 = await initAudiusLibs(true, null, ethAccounts[5])
   await deregisterLocalService(audiusLibs6, contentNodeType, creatorNodeEndpoint4)
+}
+
+const _deregisterDiscProv1 = async (audiusLibs) => {
+  const audiusLibs1 = audiusLibs
+  await deregisterLocalService(audiusLibs1, discoveryNodeType, discProvEndpoint1)
 }
 
 const _initAllVersions = async (audiusLibs) => {
@@ -267,4 +311,48 @@ const _updateCreatorNodeConfigFile = async (readPath, writePath, ownerWallet, ow
 
   fs.writeFileSync(writePath, output.join('\n'))
   console.log(`Updated ${writePath} with spOwnerWallet=${ownerWallet}\ndelegateOwnerWallet=${delegateOwnerWallet}\ndelegateWalletPkey=${delegateWalletPkey}\nendpoint=${endpoint}`)
+}
+
+// Account 4
+const _increaseStake = async (audiusLibs, ethAccounts) => {
+  let audiusLibs1 = await initAudiusLibs(true, null, ethAccounts[2])
+  let increaseAmountInAuds = 20
+  await increaseStake(audiusLibs1, increaseAmountInAuds)
+}
+
+// Account 4
+const _registerServiceType = async (audiusLibs, ethAccounts) => {
+  await registerLocalServiceType(audiusLibs, 'another')
+}
+
+
+// Account 4
+const _printAccounts = async (audiusLibs, ethAccounts) => {
+  let ganacheEthAccounts = await getEthContractAccounts()
+  // PKey is now recovered
+  const MAX_ACCOUNTS = 10
+  for (let i=0; i<MAX_ACCOUNTS; i+=1) {
+    let addr = ethAccounts[i]
+    let privateKey = ganacheEthAccounts['private_keys'][addr.toLowerCase()]
+    console.log(`${addr}:${privateKey}`)
+  }
+}
+
+const _get_addresses = async (audiusLibs) => {
+  await audiusLibs.ethContracts.GovernanceClient.init()
+  await audiusLibs.ethContracts.DelegateManagerClient.init()
+  await audiusLibs.ethContracts.ClaimsManagerClient.init()
+  const contractAddresses = {
+    audiusToken: audiusLibs.ethContracts.AudiusTokenClient.contractAddress,
+    governance: audiusLibs.ethContracts.GovernanceClient._contractAddress,
+    serviceProviderFactory: audiusLibs.ethContracts.ServiceProviderFactoryClient._contractAddress,
+    serviceTypeManager: audiusLibs.ethContracts.ServiceTypeManagerClient._contractAddress,
+    delegateManager: audiusLibs.ethContracts.DelegateManagerClient._contractAddress,
+    claimsManager: audiusLibs.ethContracts.ClaimsManagerClient._contractAddress,
+    staking: audiusLibs.ethContracts.StakingProxyClient._contractAddress,
+    registry: audiusLibs.ethContracts.RegistryClient.contractAddress,
+    blockNumber: "0",
+    network: "audius_dev"
+  }
+  console.log(JSON.stringify(contractAddresses, null, 2))
 }
