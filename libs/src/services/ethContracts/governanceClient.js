@@ -123,6 +123,21 @@ class GovernanceClient extends ContractClient {
     return this.web3Manager.sendTransaction(method, DEFAULT_GAS_AMOUNT)
   }
 
+  async setMaxInProgressProposals (
+    delay
+  ) {
+    const methodName = 'setMaxInProgressProposals'
+    const contractMethod = await this.getMethod(methodName, delay)
+    const { signature, callData } = this.getSignatureAndCallData(methodName, contractMethod)
+    const contractRegistryKey = this.web3Manager.getWeb3().utils.utf8ToHex(this.contractRegistryKey)
+    const method = await this.guardianExecuteTransaction(
+      contractRegistryKey,
+      signature,
+      callData
+    )
+    return this.web3Manager.sendTransaction(method, DEFAULT_GAS_AMOUNT)
+  }
+
   async getProposalById (
     id
   ) {
