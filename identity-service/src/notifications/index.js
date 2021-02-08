@@ -129,9 +129,13 @@ class NotificationProcessor {
 
     // Email notification queue
     this.emailQueue.process(async (job, done) => {
-      logger.info('processEmailNotifications')
-      await processEmailNotifications(expressApp, audiusLibs)
-      await processDownloadAppEmail(expressApp, audiusLibs)
+      try {
+        logger.info('processEmailNotifications')
+        await processEmailNotifications(expressApp, audiusLibs)
+        await processDownloadAppEmail(expressApp, audiusLibs)
+      } catch (e) {
+        logger.error(`Error in notifQueue ${e.message}`)
+      }
 
       // Wait 10 minutes before re-running the job
       await new Promise(resolve => setTimeout(resolve, 10 * 60 * 1000))
@@ -152,7 +156,7 @@ class NotificationProcessor {
       fs.mkdirSync(emailCachePath)
     }
 
-    // Every 10 minutes cron: '*/10 * * * *'
+    // Every 10 minutes
     this.emailQueue.add({ type: 'unreadEmailJob' }, { jobId: Date.now() })
 
     let startBlock = await getHighestBlockNumber()
