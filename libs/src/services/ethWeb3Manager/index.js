@@ -1,5 +1,5 @@
 const Web3 = require('../../web3')
-const EthereumTx = require('ethereumjs-tx')
+const EthereumTx = require('ethereumjs-tx').Transaction
 const retry = require('async-retry')
 const { sample } = require('lodash')
 const DEFAULT_GAS_AMOUNT = 200000
