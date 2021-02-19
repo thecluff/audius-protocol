@@ -1,9 +1,10 @@
 import logging
+import random
 from src.models import RouteMetrics, AppNameMetrics
 from src.tasks.celery_app import celery
 
 from src.utils.redis_metrics import metrics_prefix, metrics_application, \
-    metrics_routes, parse_metrics_key, get_rounded_date_time
+    metrics_routes, metrics_visited_nodes, merge_metrics, parse_metrics_key, get_rounded_date_time
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +127,45 @@ def refresh_metrics_matviews(db):
         session.execute('REFRESH MATERIALIZED VIEW app_name_metrics_all_time')
         logger.info('index_metrics.py | refreshed metrics matviews')
 
-######## CELERY TASK ########
+# should this be cached?
+def get_all_nodes():
+    return []
+
+def get_metrics(node):
+    # for trailing api calls (count) and unique users (unique_count) for month:
+    # make a call to {node.endpoint}/v1/metrics/routes/trailing/month
+    # fallback to {node.endpoint}/v1/metrics/routes?bucket_size=century&start_time=${startTime} with start_time being 1 month from now
+
+    # for time series for api calls and unique users
+    # bucket size and start time combos: (month,now-year), (day,now-month), (day,now-week), (hour,now-day)
+    # make a call to {node.endpoint}/v1/metrics/${route}?bucket_size=${bucket_size}&start_time=${startTime} with the different bucket sizes
+
+    # for top apps; limit is 8; bucketPath can be week, month, all_time with fallback startTime corresponding to now-week, now-month, now-year
+    # make a call to {node.endpoint}/v1/metrics/app_name/trailing/${bucketPath}?limit=8
+    # fallback to {node.endpoint}/v1/metrics/app_name?start_time=${startTime}&limit=8&include_unknown=true
+    return []
+
+# test this function
+def consolidate_metrics_from_other_nodes(redis):
+    # read this list directly from chain, there is some contract available for this
+    all_nodes = get_all_nodes()
+    # this should include the node and the last timestamp we got data from this node so we can optimize deduping
+    visited_nodes = redis.scan_iter(metrics_visited_nodes) or []
+    # for filtering unvisited nodes, do we compare node hashes, names, etc?
+    # check identifiers for filtering, getting from cache, setting cache, etc.
+    unvisited_nodes = list(filter(lambda node: node not in visited_nodes, all_nodes))
+    # expose above as endpoint for visibility?
+    if not len(unvisited_nodes):
+        redis.set(metrics_visited_nodes, [])
+        unvisited_nodes = all_nodes
+    next_node_to_visit = unvisited_nodes[random.randrange(len(unvisited_nodes))]
+    redis.set(metrics_visited_nodes, redis.get(metrics_visited_nodes) + [next_node_to_visit])
+    next_node_metrics = get_metrics(next_node_to_visit)
+    merge_metrics(next_node_metrics)
+    # do I need try/catch above?
+
+
+######## CELERY TASKs ########
 
 
 @celery.task(name="update_metrics", bind=True)
@@ -158,6 +197,39 @@ def update_metrics(self):
     except Exception as e:
         logger.error(
             "Fatal error in main loop of update_metrics: %s", e, exc_info=True)
+        raise e
+    finally:
+        if have_lock:
+            update_lock.release()
+
+
+@celery.task(name="aggregate_metrics", bind=True)
+def aggregate_metrics(self):
+    # Cache custom task class properties
+    # Details regarding custom task context can be found in wiki
+    # Custom Task definition can be found in src/__init__.py
+    redis = aggregate_metrics.redis
+
+    # Define lock acquired boolean
+    have_lock = False
+
+    # Define redis lock object
+    update_lock = redis.lock("aggregate_metrics_lock", blocking_timeout=25)
+    try:
+        # Attempt to acquire lock - do not block if unable to acquire
+        have_lock = update_lock.acquire(blocking=False)
+        if have_lock:
+            logger.info(
+                f"index_metrics.py | aggregate_metrics | {self.request.id} | Acquired aggregate_metrics_lock")
+            consolidate_metrics_from_other_nodes(redis)
+            logger.info(
+                f"index_metrics.py | aggregate_metrics | {self.request.id} | Processing complete within session")
+        else:
+            logger.error(
+                f"index_metrics.py | aggregate_metrics | {self.request.id} | Failed to acquire aggregate_metrics_lock")
+    except Exception as e:
+        logger.error(
+            "Fatal error in main loop of aggregate_metrics: %s", e, exc_info=True)
         raise e
     finally:
         if have_lock:

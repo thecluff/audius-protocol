@@ -17,6 +17,7 @@ REDIS = redis.Redis.from_url(url=REDIS_URL)
 metrics_prefix = "API_METRICS"
 metrics_routes = "routes"
 metrics_application = "applications"
+metrics_visited_nodes = "visited_nodes"
 
 '''
 NOTE: if you want to change the time interval to recording metrics,
@@ -45,7 +46,7 @@ def parse_metrics_key(key):
     Validates that a key is correctly formatted and returns
     the source: (routes|applications), ip address, and date of key
     """
-    if not metrics_prefix.startswith(metrics_prefix):
+    if not metrics_prefix.startswith(metrics_prefix): # ??? do we mean key.startswith(metrics_prefix)
         logger.warning(f"Bad redis key inserted w/out metrics prefix {key}")
         return None
 
@@ -63,6 +64,9 @@ def parse_metrics_key(key):
     date_time = datetime.strptime(f"{date}:{time}", datetime_format)
 
     return source, ip, date_time
+
+def merge_metrics(metrics):
+    pass
 
 def extract_app_name_key():
     """

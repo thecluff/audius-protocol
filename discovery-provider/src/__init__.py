@@ -325,6 +325,10 @@ def configure_celery(flask_app, celery, test_config=None):
                 "task": "update_metrics",
                 "schedule": crontab(minute=0, hour="*")
             },
+            "aggregate_metrics": {
+                "task": "aggregate_metrics",
+                "schedule": timedelta(minutes=5)
+            },
             "update_materialized_views": {
                 "task": "update_materialized_views",
                 "schedule": timedelta(seconds=60)
