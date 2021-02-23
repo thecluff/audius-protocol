@@ -1,11 +1,10 @@
 import logging
 from src.queries.get_genre_metrics import get_genre_metrics
 from src.queries.get_plays_metrics import get_plays_metrics
-from flask import Flask, Blueprint
 from flask_restx import Resource, Namespace, fields, reqparse, inputs
 from src.api.v1.helpers import make_response, success_response, to_dict, \
     parse_bool_param, parse_unix_epoch_param, abort_bad_request_param
-from .models.metrics import route_metric, app_name_metric, app_name, plays_metric, \
+from .models.metrics import cached_metric, route_metric, app_name_metric, app_name, plays_metric, \
     genre_metric, route_trailing_metric, app_name_trailing_metric
 from src.queries.get_route_metrics import get_route_metrics
 from src.queries.get_app_name_metrics import get_app_name_metrics
@@ -13,12 +12,14 @@ from src.queries.get_app_names import get_app_names
 from src.queries.get_trailing_metrics import get_monthly_trailing_route_metrics, \
     get_trailing_app_metrics
 from src.utils.redis_cache import cache
+from src.utils.redis_metrics import get_redis_route_metrics, get_redis_app_metrics
 
 logger = logging.getLogger(__name__)
 
 
 ns = Namespace('metrics', description='Metrics related operations')
 
+# cached_metrics_response = make_response("cached_metrics_response", ns, fields.List(fields.Nested(cached_metric)))
 route_metrics_response = make_response("metrics_reponse", ns, fields.List(fields.Nested(route_metric)))
 route_metrics_trailing_month_response = make_response("route_metrics_trailing_month_response", ns, fields.Nested(route_trailing_metric))
 app_name_response = make_response("app_name_response", ns, fields.List(fields.Nested(app_name)))
@@ -37,6 +38,26 @@ metrics_route_parser.add_argument('bucket_size', required=False)
 metrics_route_parser.add_argument('version', required=False, action='append')
 
 valid_date_buckets = ['hour', 'day', 'week', 'month', 'quarter', 'year', 'decade', 'century']
+
+@ns.route("/routes/cached", doc=False)
+class CachedMetrics(Resource):
+    # @ns.marshal_with(cached_metrics_response)
+    @cache(ttl_sec=3 * 60 * 60)
+    def get(self):
+        args = metrics_route_parser.parse_args()
+        metrics = get_redis_route_metrics(args)
+        response = success_response(metrics)
+        return response
+
+@ns.route("/app_name/cached", doc=False)
+class CachedMetrics(Resource):
+    # @ns.marshal_with(cached_metrics_response)
+    @cache(ttl_sec=3 * 60 * 60)
+    def get(self):
+        args = metrics_route_parser.parse_args()
+        metrics = get_redis_app_metrics(args)
+        response = success_response(metrics)
+        return response
 
 @ns.route("/routes", doc=False)
 class RouteMetrics(Resource):

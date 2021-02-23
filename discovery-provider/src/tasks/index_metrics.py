@@ -1,13 +1,17 @@
 import logging
-import random
+import requests
+from datetime import datetime, timedelta
+from src import eth_abi_values
 from src.models import RouteMetrics, AppNameMetrics
 from src.tasks.celery_app import celery
 
-from src.utils.redis_metrics import metrics_prefix, metrics_application, \
-    metrics_routes, metrics_visited_nodes, merge_metrics, parse_metrics_key, get_rounded_date_time
+from src.utils.redis_metrics import metrics_prefix, metrics_applications, \
+    metrics_routes, metrics_visited_nodes, merge_route_metrics, merge_app_metrics, parse_metrics_key, get_rounded_date_time, METRICS_INTERVAL
 
 logger = logging.getLogger(__name__)
 
+sp_factory_registry_key = bytes("ServiceProviderFactory", "utf-8")
+discovery_node_service_type = bytes("discovery-node", "utf-8")
 
 def process_route_keys(session, redis, key, ip, date):
     """
@@ -62,10 +66,10 @@ def process_app_name_keys(session, redis, key, ip, date):
     """
     try:
         app_name_metrics = []
-        routes = redis.hgetall(key)
-        for key_bstr in routes:
+        app_names = redis.hgetall(key)
+        for key_bstr in app_names:
             app_name = key_bstr.decode('utf-8')
-            val = int(routes[key_bstr].decode('utf-8'))
+            val = int(app_names[key_bstr].decode('utf-8'))
 
             app_name_metrics.append(
                 AppNameMetrics(
@@ -105,7 +109,7 @@ def sweep_metrics(db, redis):
                 if key_date < current_date_time:
                     if source == metrics_routes:
                         process_route_keys(session, redis, key, ip, key_date)
-                    elif source == metrics_application:
+                    elif source == metrics_applications:
                         process_app_name_keys(session, redis, key, ip, key_date)
             except KeyError as e:
                 logger.warning(e)
@@ -129,40 +133,65 @@ def refresh_metrics_matviews(db):
 
 # should this be cached?
 def get_all_nodes():
-    return []
+    shared_config = aggregate_metrics.shared_config
+    eth_web3 = aggregate_metrics.eth_web3
+    eth_registry_address = aggregate_metrics.eth_web3.toChecksumAddress(
+        shared_config["eth_contracts"]["registry"]
+    )
+    eth_registry_instance = eth_web3.eth.contract(
+        address=eth_registry_address, abi=eth_abi_values["Registry"]["abi"]
+    )
+    sp_factory_address = eth_registry_instance.functions.getContract(
+        sp_factory_registry_key
+    ).call()
+    sp_factory_inst = eth_web3.eth.contract(
+        address=sp_factory_address, abi=eth_abi_values["ServiceProviderFactory"]["abi"]
+    )
+    discovery_providers = sp_factory_inst.functions.getServiceProviderList(discovery_node_service_type).call()
+    return discovery_providers
 
-def get_metrics(node):
-    # for trailing api calls (count) and unique users (unique_count) for month:
-    # make a call to {node.endpoint}/v1/metrics/routes/trailing/month
-    # fallback to {node.endpoint}/v1/metrics/routes?bucket_size=century&start_time=${startTime} with start_time being 1 month from now
+def get_metrics(endpoint, start_time):
+    try:
+        route_metrics_request = requests.get(f"{endpoint}/routes/cached?start_time={start_time}", timeout=3)
+        if route_metrics_request.status_code != 200:
+            raise Exception(f"Query to cached route metrics endpoint failed with status code {r.status_code}")
+        
+        app_metrics_request = requests.get(f"{endpoint}/app_name/cached?start_time={start_time}", timeout=3)
+        if app_metrics_request.status_code != 200:
+            raise Exception(f"Query to cached app metrics endpoint failed with status code {r.status_code}")
 
-    # for time series for api calls and unique users
-    # bucket size and start time combos: (month,now-year), (day,now-month), (day,now-week), (hour,now-day)
-    # make a call to {node.endpoint}/v1/metrics/${route}?bucket_size=${bucket_size}&start_time=${startTime} with the different bucket sizes
-
-    # for top apps; limit is 8; bucketPath can be week, month, all_time with fallback startTime corresponding to now-week, now-month, now-year
-    # make a call to {node.endpoint}/v1/metrics/app_name/trailing/${bucketPath}?limit=8
-    # fallback to {node.endpoint}/v1/metrics/app_name?start_time=${startTime}&limit=8&include_unknown=true
-    return []
+        return route_metrics_request.json(), app_metrics_request.json()
+    except Exception as e:
+        logger.warning(f"Could not get metrics from node ${endpoint} with start_time {start_time}")
+        logger.error(e)
+        return None, None
 
 # test this function
-def consolidate_metrics_from_other_nodes(redis):
-    # read this list directly from chain, there is some contract available for this
-    all_nodes = get_all_nodes()
-    # this should include the node and the last timestamp we got data from this node so we can optimize deduping
-    visited_nodes = redis.scan_iter(metrics_visited_nodes) or []
-    # for filtering unvisited nodes, do we compare node hashes, names, etc?
-    # check identifiers for filtering, getting from cache, setting cache, etc.
-    unvisited_nodes = list(filter(lambda node: node not in visited_nodes, all_nodes))
-    # expose above as endpoint for visibility?
-    if not len(unvisited_nodes):
-        redis.set(metrics_visited_nodes, [])
-        unvisited_nodes = all_nodes
-    next_node_to_visit = unvisited_nodes[random.randrange(len(unvisited_nodes))]
-    redis.set(metrics_visited_nodes, redis.get(metrics_visited_nodes) + [next_node_to_visit])
-    next_node_metrics = get_metrics(next_node_to_visit)
-    merge_metrics(next_node_metrics)
-    # do I need try/catch above?
+# <metrics_prefix>:<metrics_application>:<ip>:<rounded_date_time_format>
+#         ie: "API_METRICS:applications:192.168.0.1:2020/08/04:14"
+# <metrics_prefix>:<metrics_routes>:<ip>:<rounded_date_time_format>
+#         ie: "API_METRICS:routes:192.168.0.1:2020/08/04:14"
+def consolidate_metrics_from_other_nodes(self, db, redis):
+    # make sure to exclude this node (itself)
+    all_other_nodes = [node.endpoint for node in get_all_nodes(self)]
+    logger.info(all_other_nodes)
+
+    # expose as endpoint for visibility?
+    visited_node_timestamps = redis.hgetall(metrics_visited_nodes) or {}
+
+    for node in all_other_nodes:
+        # what should we do if the visited_node_timestamps does not include a given node e.g. new node, or when it's empty the first time: datetime.utcnow() - timedelta(minutes=5)?
+        start_time = visited_node_timestamps[node]
+        new_route_metrics, new_app_metrics = get_metrics(node, start_time)
+        if new_route_metrics and new_app_metrics: # do we want to separate route and app, i.e. one call succees other fails we merge the one that succeeds, also may mean 2 visited maps
+            end_time = datetime.utcnow().strftime("%Y/%m/%d:%H:%M")
+            visited_node_timestamps[node] = end_time
+            merge_route_metrics(new_route_metrics, end_time, db)
+            merge_app_metrics(new_app_metrics, end_time, db)
+    redis.hmset(metrics_visited_nodes, visited_node_timestamps)
+
+    # add logic to invalidate redis cache after end of day or end of month?
+    
 
 
 ######## CELERY TASKs ########
@@ -208,6 +237,7 @@ def aggregate_metrics(self):
     # Cache custom task class properties
     # Details regarding custom task context can be found in wiki
     # Custom Task definition can be found in src/__init__.py
+    db = aggregate_metrics.db
     redis = aggregate_metrics.redis
 
     # Define lock acquired boolean
@@ -221,7 +251,7 @@ def aggregate_metrics(self):
         if have_lock:
             logger.info(
                 f"index_metrics.py | aggregate_metrics | {self.request.id} | Acquired aggregate_metrics_lock")
-            consolidate_metrics_from_other_nodes(redis)
+            consolidate_metrics_from_other_nodes(self, db, redis)
             logger.info(
                 f"index_metrics.py | aggregate_metrics | {self.request.id} | Processing complete within session")
         else:

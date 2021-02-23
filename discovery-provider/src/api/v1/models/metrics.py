@@ -1,6 +1,11 @@
 from flask_restx import fields
 from .common import ns
 
+# cached_metric = ns.model('cached_metric', {
+#     "ip": fields.String,
+#     "count": fields.Integer,
+# })
+
 route_metric = ns.model('route_metric', {
     "timestamp": fields.String,
     "count": fields.Integer,
