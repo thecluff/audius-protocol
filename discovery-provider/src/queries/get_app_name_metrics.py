@@ -1,12 +1,71 @@
 import logging
 import time
-from sqlalchemy import func, desc
-
-from src.models import AppNameMetrics
+from sqlalchemy import func, desc, asc
+from datetime import date, timedelta
+from src import exceptions
+from src.models import AppNameMetrics, DailyAppNameMetrics, MonthlyAppNameMetrics
 from src.utils import db_session
 
 logger = logging.getLogger(__name__)
 
+def get_aggregate_app_metrics(time_range, limit):
+    """
+    Returns app name metrics for a given time range
+
+    Args:
+        time_range: one of "week", "month", "all_time"
+        limit: number The max number of apps to return
+    Returns:
+        [{ name: string, count: number }, ...]
+    """
+    db = db_session.get_db_read_replica()
+    with db.scoped_session() as session:
+        today = date.today()
+        seven_days_ago = today - timedelta(days=7)
+        thirty_days_ago = today - timedelta(days=30)
+
+        if time_range == "week":
+            query = (
+                session.query(
+                    DailyAppNameMetrics.application_name,
+                    func.sum(DailyAppNameMetrics.count).label('count')
+                )
+                .filter(seven_days_ago <= DailyAppNameMetrics.timestamp)
+                .filter(DailyAppNameMetrics.timestamp < today)
+                .group_by(DailyAppNameMetrics.application_name)
+                .order_by(desc('count'), asc(DailyAppNameMetrics.application_name))
+                .limit(limit)
+                .all()
+            )
+        elif time_range == "month":
+            query = (
+                session.query(
+                    DailyAppNameMetrics.application_name,
+                    func.sum(DailyAppNameMetrics.count).label('count')
+                )
+                .filter(thirty_days_ago <= DailyAppNameMetrics.timestamp)
+                .filter(DailyAppNameMetrics.timestamp < today)
+                .group_by(DailyAppNameMetrics.application_name)
+                .order_by(desc('count'), asc(DailyAppNameMetrics.application_name))
+                .limit(limit)
+                .all()
+            )
+        elif time_range == "all_time":
+            query = (
+                session.query(
+                    MonthlyAppNameMetrics.application_name,
+                    func.sum(MonthlyAppNameMetrics.count).label('count')
+                )
+                .filter(MonthlyAppNameMetrics.timestamp < today)
+                .group_by(MonthlyAppNameMetrics.application_name)
+                .order_by(desc('count'), asc(MonthlyAppNameMetrics.application_name))
+                .limit(limit)
+                .all()
+            )
+        else:
+            raise exceptions.ArgumentError("Invalid time_range")
+
+        return [{"name": item[0], "count": item[1]} for item in query]
 
 def get_app_name_metrics(app_name, args):
     """

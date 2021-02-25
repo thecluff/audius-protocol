@@ -310,46 +310,46 @@ def configure_celery(flask_app, celery, test_config=None):
                  "src.tasks.cache_user_balance", "src.monitors.monitoring_queue"
                  ],
         beat_schedule={
-            "update_discovery_provider": {
-                "task": "update_discovery_provider",
-                "schedule": timedelta(seconds=5),
-            },
-            "update_ipld_blacklist": {
-                "task": "update_ipld_blacklist",
-                "schedule": timedelta(seconds=ipld_interval),
-            },
-            "update_play_count": {
-                "task": "update_play_count",
-                "schedule": timedelta(seconds=60)
-            },
-            "update_metrics": {
-                "task": "update_metrics",
-                "schedule": timedelta(minutes=METRICS_INTERVAL)
-            },
+            # "update_discovery_provider": {
+            #     "task": "update_discovery_provider",
+            #     "schedule": timedelta(seconds=5),
+            # },
+            # "update_ipld_blacklist": {
+            #     "task": "update_ipld_blacklist",
+            #     "schedule": timedelta(seconds=ipld_interval),
+            # },
+            # "update_play_count": {
+            #     "task": "update_play_count",
+            #     "schedule": timedelta(seconds=60)
+            # },
+            # "update_metrics": {
+            #     "task": "update_metrics",
+            #     "schedule": timedelta(minutes=METRICS_INTERVAL)
+            # },
             "aggregate_metrics": {
                 "task": "aggregate_metrics",
-                "schedule": timedelta(minutes=METRICS_INTERVAL)
+                "schedule": timedelta(seconds=30)#minutes=METRICS_INTERVAL)
             },
-            "update_materialized_views": {
-                "task": "update_materialized_views",
-                "schedule": timedelta(seconds=60)
-            },
-            "update_network_peers": {
-                "task": "update_network_peers",
-                "schedule": timedelta(seconds=30)
-            },
-            "index_trending": {
-                "task": "index_trending",
-                "schedule": crontab(minute=0, hour="*")
-            },
-            "update_user_balances": {
-                "task": "update_user_balances",
-                "schedule": timedelta(minutes=5)
-            },
-            "monitoring_queue": {
-                "task": "monitoring_queue",
-                "schedule": timedelta(seconds=60)
-            }
+            # "update_materialized_views": {
+            #     "task": "update_materialized_views",
+            #     "schedule": timedelta(seconds=60)
+            # },
+            # "update_network_peers": {
+            #     "task": "update_network_peers",
+            #     "schedule": timedelta(seconds=30)
+            # },
+            # "index_trending": {
+            #     "task": "index_trending",
+            #     "schedule": crontab(minute=0, hour="*")
+            # },
+            # "update_user_balances": {
+            #     "task": "update_user_balances",
+            #     "schedule": timedelta(minutes=5)
+            # },
+            # "monitoring_queue": {
+            #     "task": "monitoring_queue",
+            #     "schedule": timedelta(seconds=60)
+            # }
         },
         task_serializer="json",
         accept_content=["json"],

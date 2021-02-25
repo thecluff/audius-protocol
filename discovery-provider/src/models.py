@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Text,
@@ -484,7 +485,7 @@ class DailyUniqueUsersMetrics(Base):
 
     id = Column(Integer, primary_key=True)
     count = Column(Integer, nullable=False)
-    timestamp = Column(Date, nullable=False, default=func.today())
+    timestamp = Column(Date, nullable=False)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 
@@ -500,7 +501,7 @@ class DailyTotalUsersMetrics(Base):
 
     id = Column(Integer, primary_key=True)
     count = Column(Integer, nullable=False)
-    timestamp = Column(Date, nullable=False, default=func.today().replace(day=1))
+    timestamp = Column(Date, nullable=False)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 
@@ -516,7 +517,7 @@ class MonthlyUniqueUsersMetrics(Base):
 
     id = Column(Integer, primary_key=True)
     count = Column(Integer, nullable=False)
-    timestamp = Column(Date, nullable=False, default=func.today().replace(day=1))
+    timestamp = Column(Date, nullable=False)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 
@@ -532,7 +533,7 @@ class MonthlyTotalUsersMetrics(Base):
 
     id = Column(Integer, primary_key=True)
     count = Column(Integer, nullable=False)
-    timestamp = Column(Date, nullable=False, default=func.today().replace(day=1))
+    timestamp = Column(Date, nullable=False)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 
@@ -569,7 +570,7 @@ class DailyAppNameMetrics(Base):
     id = Column(Integer, primary_key=True)
     application_name = Column(String, nullable=False)
     count = Column(Integer, nullable=False)
-    timestamp = Column(Date, nullable=False, default=func.today())
+    timestamp = Column(Date, nullable=False)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 
@@ -587,7 +588,7 @@ class MonthlyAppNameMetrics(Base):
     id = Column(Integer, primary_key=True)
     application_name = Column(String, nullable=False)
     count = Column(Integer, nullable=False)
-    timestamp = Column(Date, nullable=False, default=func.today().replace(day=1))
+    timestamp = Column(Date, nullable=False)
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 

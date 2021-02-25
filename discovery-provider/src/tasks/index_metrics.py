@@ -1,12 +1,14 @@
 import logging
 import requests
+import json
 from datetime import datetime, timedelta
 from src import eth_abi_values
 from src.models import RouteMetrics, AppNameMetrics
 from src.tasks.celery_app import celery
-
+from src.utils.config import shared_config
 from src.utils.redis_metrics import metrics_prefix, metrics_applications, \
-    metrics_routes, metrics_visited_nodes, merge_route_metrics, merge_app_metrics, parse_metrics_key, get_rounded_date_time, METRICS_INTERVAL
+    metrics_routes, metrics_visited_nodes, merge_route_metrics, merge_app_metrics, \
+    parse_metrics_key, get_rounded_date_time, datetime_format_secondary, METRICS_INTERVAL
 
 logger = logging.getLogger(__name__)
 
@@ -147,51 +149,71 @@ def get_all_nodes():
     sp_factory_inst = eth_web3.eth.contract(
         address=sp_factory_address, abi=eth_abi_values["ServiceProviderFactory"]["abi"]
     )
-    discovery_providers = sp_factory_inst.functions.getServiceProviderList(discovery_node_service_type).call()
-    return discovery_providers
+    num_discovery_providers = sp_factory_inst.functions.getTotalServiceTypeProviders(discovery_node_service_type).call()
+    logger.info(f"number of discovery providers: {num_discovery_providers}")
+    service_infos = [sp_factory_inst.functions.getServiceEndpointInfo(discovery_node_service_type, i).call() for i in range(1, num_discovery_providers + 1)]
+    parsed_service_infos = []
+    for service_info in service_infos:
+        parsed_service_infos.append({
+            "delegate_owner": service_info[3],
+            "endpoint": service_info[1]
+        })
+    logger.info(f"parsed service infos: {parsed_service_infos}")
+
+    return parsed_service_infos
 
 def get_metrics(endpoint, start_time):
     try:
-        route_metrics_request = requests.get(f"{endpoint}/routes/cached?start_time={start_time}", timeout=3)
-        if route_metrics_request.status_code != 200:
-            raise Exception(f"Query to cached route metrics endpoint failed with status code {r.status_code}")
+        start_time = 1614207943
+        route_metrics_endpoint = f"{endpoint}/v1/metrics/aggregates/routes/cached?start_time={start_time}"
+        logger.info(f"route metrics request to: {route_metrics_endpoint}")
+        route_metrics_response = requests.get(route_metrics_endpoint, timeout=3)
+        if route_metrics_response.status_code != 200:
+            raise Exception(f"Query to cached route metrics endpoint {route_metrics_endpoint} failed with status code {route_metrics_response.status_code}")
         
-        app_metrics_request = requests.get(f"{endpoint}/app_name/cached?start_time={start_time}", timeout=3)
-        if app_metrics_request.status_code != 200:
-            raise Exception(f"Query to cached app metrics endpoint failed with status code {r.status_code}")
+        app_metrics_endpoint = f"{endpoint}/v1/metrics/aggregates/apps/cached?start_time={start_time}"
+        logger.info(f"app metrics request to: {app_metrics_endpoint}")
+        app_metrics_response = requests.get(app_metrics_endpoint, timeout=3)
+        if app_metrics_response.status_code != 200:
+            raise Exception(f"Query to cached app metrics endpoint {app_metrics_endpoint} failed with status code {app_metrics_response.status_code}")
 
-        return route_metrics_request.json(), app_metrics_request.json()
+        return route_metrics_response.json()['data'], app_metrics_response.json()['data']
     except Exception as e:
-        logger.warning(f"Could not get metrics from node ${endpoint} with start_time {start_time}")
+        logger.warning(f"Could not get metrics from node {endpoint} with start_time {start_time}")
         logger.error(e)
         return None, None
 
 # test this function
-# <metrics_prefix>:<metrics_application>:<ip>:<rounded_date_time_format>
-#         ie: "API_METRICS:applications:192.168.0.1:2020/08/04:14"
-# <metrics_prefix>:<metrics_routes>:<ip>:<rounded_date_time_format>
-#         ie: "API_METRICS:routes:192.168.0.1:2020/08/04:14"
 def consolidate_metrics_from_other_nodes(self, db, redis):
-    # make sure to exclude this node (itself)
-    all_other_nodes = [node.endpoint for node in get_all_nodes(self)]
-    logger.info(all_other_nodes)
+    all_other_nodes = [node["endpoint"] for node in get_all_nodes() if node["delegate_owner"] != shared_config["delegate"]["owner_wallet"]]
+    logger.info(f"this node's delegate owner wallet: {shared_config['delegate']['owner_wallet']}")
+    logger.info(f"all the other nodes: {all_other_nodes}")
 
-    # expose as endpoint for visibility?
-    visited_node_timestamps = redis.hgetall(metrics_visited_nodes) or {}
+    visited_node_timestamps_str = redis.get(metrics_visited_nodes)
+    visited_node_timestamps = json.loads(visited_node_timestamps_str) if visited_node_timestamps_str else {}
 
+    two_iterations_ago = datetime.utcnow() - timedelta(minutes=METRICS_INTERVAL * 2)
+    two_iterations_ago_str = two_iterations_ago.strftime(datetime_format_secondary)
     for node in all_other_nodes:
-        # what should we do if the visited_node_timestamps does not include a given node e.g. new node, or when it's empty the first time: datetime.utcnow() - timedelta(minutes=5)?
-        start_time = visited_node_timestamps[node]
+        start_time_str = visited_node_timestamps[node] if node in visited_node_timestamps else two_iterations_ago_str
+        start_time_obj = datetime.strptime(start_time_str, datetime_format_secondary)
+        start_time = int(start_time_obj.timestamp())
         new_route_metrics, new_app_metrics = get_metrics(node, start_time)
-        if new_route_metrics and new_app_metrics: # do we want to separate route and app, i.e. one call succees other fails we merge the one that succeeds, also may mean 2 visited maps
-            end_time = datetime.utcnow().strftime("%Y/%m/%d:%H:%M")
+        
+        logger.info(f"received route metrics: {new_route_metrics}")
+        logger.info(f"received app metrics: {new_app_metrics}")
+        
+        if new_route_metrics is not None and new_app_metrics is not None:
+            end_time = datetime.utcnow().strftime(datetime_format_secondary)
             visited_node_timestamps[node] = end_time
-            merge_route_metrics(new_route_metrics, end_time, db)
-            merge_app_metrics(new_app_metrics, end_time, db)
-    redis.hmset(metrics_visited_nodes, visited_node_timestamps)
-
-    # add logic to invalidate redis cache after end of day or end of month?
+            if new_route_metrics:
+                merge_route_metrics(new_route_metrics, end_time, db)
+            if new_app_metrics:
+                merge_app_metrics(new_app_metrics, end_time, db)
     
+    logger.info(f"visited node timestamps: {visited_node_timestamps}")
+    if visited_node_timestamps:
+        redis.set(metrics_visited_nodes, json.dumps(visited_node_timestamps))
 
 
 ######## CELERY TASKs ########
